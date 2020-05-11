@@ -10,12 +10,13 @@ const follow = require('./follow'); // function to hop multiple links by "rel"
 const stompClient = require('./websocket-listener');
 
 const root = '/api';
+const search = '/api/employeeSearch';
 
 class App extends React.Component {
 
 	constructor(props) {
 		super(props);
-		this.state = {employees: [], attributes: [], page: 1, pageSize: 2, links: {}
+		this.state = {employees: [], attributes: [], page: 1, pageSize: 2, searchContent: 3, links: {}
 		   , loggedInManager: this.props.loggedInManager};
 		this.updatePageSize = this.updatePageSize.bind(this);
 		this.onCreate = this.onCreate.bind(this);
@@ -71,10 +72,62 @@ class App extends React.Component {
 				employees: employees,
 				attributes: Object.keys(this.schema.properties),
 				pageSize: pageSize,
+				searchContent: "test",
 				links: this.links
 			});
 		});
 	}
+
+	searchFromServer(searchContent) {
+    		follow(client, search, [
+    				{rel: '', params: {searchContent}}]
+    		).then(employeeCollection => {
+    			return client({
+    				method: 'GET',
+    				path: employeeCollection.entity._links.profile.href,
+    				headers: {'Accept': 'application/schema+json'}
+    			}).then(schema => {
+    				// tag::json-schema-filter[]
+    				/**
+    				 * Filter unneeded JSON Schema properties, like uri references and
+    				 * subtypes ($ref).
+    				 */
+    				Object.keys(schema.entity.properties).forEach(function (property) {
+    					if (schema.entity.properties[property].hasOwnProperty('format') &&
+    						schema.entity.properties[property].format === 'uri') {
+    						delete schema.entity.properties[property];
+    					}
+    					else if (schema.entity.properties[property].hasOwnProperty('$ref')) {
+    						delete schema.entity.properties[property];
+    					}
+    				});
+
+    				this.schema = schema.entity;
+    				this.links = employeeCollection.entity._links;
+    				return employeeCollection;
+    				// end::json-schema-filter[]
+    			});
+    		}).then(employeeCollection => {
+    			this.page = employeeCollection.entity.page;
+    			return employeeCollection.entity._embedded.employees.map(employee =>
+    					client({
+    						method: 'GET',
+    						path: employee._links.self.href
+    					})
+    			);
+    		}).then(employeePromises => {
+    			return when.all(employeePromises);
+    		}).done(employees => {
+    			this.setState({
+    				page: this.page,
+    				employees: employees,
+    				attributes: Object.keys(this.schema.properties),
+    				pageSize: pageSize,
+    				searchContent: "test",
+    				links: this.links
+    			});
+    		});
+    	}
 
 	// tag::on-create[]
 	onCreate(newEmployee) {
@@ -368,6 +421,16 @@ class EmployeeList extends React.Component {
 		}
 	}
 
+	handleSearchInput(e) {
+    		e.preventDefault();
+    		const pageSize = ReactDOM.findDOMNode(this.refs.pageSize).value;
+//    		if (/^[0-9]+$/.test(pageSize)) {
+//    			this.props.updatePageSize(pageSize);
+//    		} else {
+//    			ReactDOM.findDOMNode(this.refs.pageSize).value = pageSize.substring(0, pageSize.length - 1);
+//    		}
+    	}
+
 	handleNavFirst(e) {
 		e.preventDefault();
 		this.props.onNavigate(this.props.links.first.href);
@@ -419,6 +482,7 @@ class EmployeeList extends React.Component {
 			<div>
 				{pageInfo}
 				<input ref="pageSize" defaultValue={this.props.pageSize} onInput={this.handleInput}/>
+				<input ref="searchContent" defaultValue="" onInput={this.handleSearchInput}/>
 				<table>
 					<tbody>
 						<tr>
